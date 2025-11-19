@@ -84,7 +84,7 @@ def check_args(args, logger):
         args.last_reg = 'deform'
     elif args.do_affine:
         args.last_reg = 'affine'
-    elif args.get(do_similarity', False):
+    elif args.do_similarity:
         args.last_reg = 'similarity'
     elif args.do_rigid:
         args.last_reg = 'rigid'
