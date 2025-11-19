@@ -303,7 +303,8 @@ def prepare_prev_transform(prev_transform, prev_transform_type, transform_type):
             return {
                 'init_translation': rigidmat[:, :dims, -1].contiguous(),
                 'init_moment': rigidmat[:, :dims, :dims].contiguous(),
-            }        else:
+            }        
+    else:
             key = 'init_rigid' if transform_type == 'Affine' else 'init_affine'
             return {
                 key: rigidmat
