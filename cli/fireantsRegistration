@@ -296,7 +296,7 @@ def prepare_prev_transform(prev_transform, prev_transform_type, transform_type):
             }
     elif prev_transform_type == 'Rigid':
         rigidmat = prev_transform.get_rigid_matrix(homogenous=False).detach()
-        
+
         # Check if NEXT is Similarity (treat it like Rigid)
         if transform_type == 'Rigid' or transform_type == 'Similarity':
             dims = rigidmat.shape[1]
@@ -304,8 +304,9 @@ def prepare_prev_transform(prev_transform, prev_transform_type, transform_type):
                 'init_translation': rigidmat[:, :dims, -1].contiguous(),
                 'init_moment': rigidmat[:, :dims, :dims].contiguous(),
             }        
-    else:
-            key = 'init_rigid' if transform_type == 'Affine' else 'init_affine'
+        else:
+            key = 'init_rigid' if transform_type == 'Affine' 
+        else 'init_affine'
             return {
                 key: rigidmat
             }
