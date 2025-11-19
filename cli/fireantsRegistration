@@ -450,7 +450,7 @@ def main():
     prev_transforms = []
     for i, transform_str in enumerate(args.transform):
         transform_type, _ = parse_transform(transform_str, args)
-        assert transform_type in ['Rigid', 'Affine', 'SyN', 'Greedy'], f"Unsupported transform type: {transform_type}"
+        assert transform_type in ['Rigid', 'Similarity', 'Affine', 'SyN', 'Greedy'], f"Unsupported transform type: {transform_type}"        
         if not is_compatible_next_transform(prev_transforms, transform_type):
             logger.error(f"Transforms must be in order, {transform_str} is not compatible with {prev_transforms}")
         prev_transforms.append(transform_type)
