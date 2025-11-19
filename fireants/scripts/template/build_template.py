@@ -169,13 +169,37 @@ def main(args):
         
         # perform shape averaging if specified
         if avg_warp is not None:
-            avg_warp = avg_warp / total_dataset_size   # we computed sums, so we need to divide by total dataset size
+            # avg_warp is an average of FULL COORDINATE FIELDS (not displacements)
+            avg_warp = avg_warp / total_dataset_size
             parallel_state.all_reduce_across_dp_ranks(avg_warp, op=torch.distributed.ReduceOp.SUM)
-            # now we have added all the average grid coordinates, take inverse
+
+            # take inverse: returns *voxel-space displacement field*
             init_template_batch.broadcast(1)
-            inverse_avg_warp = shape_averaging_invwarp(init_template_batch, avg_warp)
+            inverse_disp_vox = shape_averaging_invwarp(init_template_batch, avg_warp)
+
+            # convert voxel displacement → normalized displacement in [-1,1]
+            _, H, W, D, _ = inverse_disp_vox.shape
+            norm_factors = torch.tensor([
+                2.0 / (W - 1),    # x normalized by width
+                2.0 / (H - 1),    # y normalized by height
+                2.0 / (D - 1),    # z normalized by depth
+            ], device=inverse_disp_vox.device)
+
+            inverse_disp_norm = inverse_disp_vox * norm_factors.view(1, 1, 1, 1, 3)
+
+            # laplacian smoothing BEFORE applying the averaged warp
             updated_template_arr = laplace(updated_template_arr, itk_scale=True, learning_rate=1)
-            updated_template_arr = fireants_interpolator(input=updated_template_arr, affine=None, grid=inverse_avg_warp, mode='bilinear', align_corners=True)
+
+            # apply normalized displacement field
+            updated_template_arr = fireants_interpolator(
+                input=updated_template_arr,
+                affine=None,
+                grid=inverse_disp_norm,
+                mode='bilinear',
+                align_corners=True,
+                is_displacement=True,   # must remain True
+            )
+
 
         # apply laplacian filter
         for _ in range(args.num_laplacian):
