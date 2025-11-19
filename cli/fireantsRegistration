@@ -259,32 +259,14 @@ def parse_metric(metric_str: str) -> Tuple[str, List[Union[str, float]]]:
 
     return metric_type, pd
 
-
 def prepare_prev_transform(prev_transform, prev_transform_type, transform_type):
     '''
     Prepare the previous transform for the next transform.
-
-    Parameters
-    ----------
-    prev_transform : object
-        The previous transform object.
-    prev_transform_type : str or None
-        The type of the previous transform. If None, no previous transform is used.
-    transform_type : str
-        The type of the next transform.
-
-    Returns
-    -------
-    dict
-        A dictionary containing initialization parameters for the next transform.
-        If `prev_transform_type` is None, returns an empty dictionary.
-        For other values of `prev_transform_type`, returns a dictionary with keys and values
-        appropriate for initializing the next transform, depending on the types.
     '''
     if prev_transform_type is None:
         return {}
     elif prev_transform_type == 'Moments':
-        if transform_type == 'Rigid':
+        if transform_type == 'Rigid' or transform_type == 'Similarity':
             return {
                 'init_translation': prev_transform.get_rigid_transl_init().detach(),
                 'init_moment': prev_transform.get_rigid_moment_init().detach(),
@@ -297,25 +279,23 @@ def prepare_prev_transform(prev_transform, prev_transform_type, transform_type):
     elif prev_transform_type == 'Rigid':
         rigidmat = prev_transform.get_rigid_matrix(homogenous=False).detach()
 
-        # Check if NEXT is Similarity (treat it like Rigid)
+        # If next is Rigid or Similarity (needs decomposed R/T/S)
         if transform_type == 'Rigid' or transform_type == 'Similarity':
             dims = rigidmat.shape[1]
             return {
                 'init_translation': rigidmat[:, :dims, -1].contiguous(),
                 'init_moment': rigidmat[:, :dims, :dims].contiguous(),
-            }        
+            }       
+        # If next is Affine/SyN/Greedy (needs full matrix)
         else:
-            key = 'init_rigid' if transform_type == 'Affine' 
-        else 'init_affine':
+            key = 'init_rigid' if transform_type == 'Affine' else 'init_affine'
             return {
                 key: rigidmat
             }
     elif prev_transform_type == 'Similarity':
-        # Similarity acts like Rigid but outputs a Scaled Rigid matrix.
-        # We treat it as an initialization for Affine.
+        # Similarity outputs a matrix that Affine/Deformable needs to initialize with
         key = 'init_rigid' if transform_type == 'Affine' else 'init_affine'
         return {
-            # Use get_rigid_matrix (which includes scale) from your new class
             key: prev_transform.get_rigid_matrix(homogenous=False).detach()
         }
     elif prev_transform_type == 'Affine':
