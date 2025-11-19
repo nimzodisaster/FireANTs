@@ -306,7 +306,7 @@ def prepare_prev_transform(prev_transform, prev_transform_type, transform_type):
             }        
         else:
             key = 'init_rigid' if transform_type == 'Affine' 
-        else 'init_affine'
+        else 'init_affine':
             return {
                 key: rigidmat
             }
