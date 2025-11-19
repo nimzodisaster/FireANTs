@@ -3,6 +3,8 @@ from fireants.registration.affine import AffineRegistration
 from fireants.registration.moments import MomentsRegistration
 from fireants.registration.greedy import GreedyRegistration
 from fireants.registration.syn import SyNRegistration
+# Add the explicit import for your new class
+from fireants.registration.similarity import SimilarityRegistration 
 from fireants.io.image import BatchedImages
 
 import os
@@ -57,6 +59,13 @@ def register_batch(
                                     **dict(args.rigid))
         rigid.optimize()
         init_rigid = rigid.get_rigid_matrix()
+        
+        # If rigid ran, we update the init vars so Similarity can pick them up
+        # init_rigid is [N, D, D+1] or [N, D+1, D+1]
+        dims = init_template_batch.dims
+        init_moment_rigid = init_rigid[:, :dims, :dims]
+        init_moment_transl = init_rigid[:, :dims, -1]
+
         if args.last_reg == 'rigid':
             moved_images = rigid.evaluate(init_template_batch, moving_images_batch)
             # save the transformed images (todo: change this to some other save format)
@@ -65,13 +74,36 @@ def register_batch(
             # save shape
             avg_warp = add_shape(avg_warp, rigid)
         del rigid
+
+    # --- NEW: SIMILARITY REGISTRATION BLOCK ---
+    # We check if 'do_similarity' exists in args and is True
+    if args.get('do_similarity', False):
+        logger.debug("Running similarity registration")
+        # We initialize using the outputs of the previous step (Rigid or Moments)
+        sim = SimilarityRegistration(fixed_images=init_template_batch, \
+                                     moving_images=moving_images_batch, \
+                                     init_translation=init_moment_transl, \
+                                     init_moment=init_moment_rigid, \
+                                     **dict(args.similarity))
+        sim.optimize()
+        # Update init_rigid so Affine starts from the scaled result
+        init_rigid = sim.get_rigid_matrix()
+        
+        if args.last_reg == 'similarity':
+            moved_images = sim.evaluate(init_template_batch, moving_images_batch)
+            if is_last_epoch and args.save_moved_images:
+                FakeBatchedImages(moved_images, init_template_batch).write_image(moved_file_names)
+            avg_warp = add_shape(avg_warp, sim)
+        del sim
+    # ------------------------------------------
     
     if args.do_affine:
         logger.debug("Running affine registration")
+        # Affine takes the full matrix 'init_rigid' (which might now be from Similarity)
         affine = AffineRegistration(fixed_images=init_template_batch, \
                                     moving_images=moving_images_batch, \
-                                        init_rigid=init_rigid, \
-                                        **dict(args.affine))
+                                    init_rigid=init_rigid, \
+                                    **dict(args.affine))
         affine.optimize()
         init_affine = affine.get_affine_matrix()
         if args.last_reg == 'affine':
