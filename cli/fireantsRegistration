@@ -13,6 +13,7 @@ from fireants.utils.globals import PERMITTED_ANTS_WARP_EXT
 from fireants.io.image import Image, BatchedImages, FakeBatchedImages
 from fireants.registration.rigid import RigidRegistration
 from fireants.registration.affine import AffineRegistration
+from fireants.registration.similarity import SimilarityRegistration
 from fireants.registration.moments import MomentsRegistration
 from fireants.registration.greedy import GreedyRegistration
 from fireants.registration.syn import SyNRegistration
@@ -37,9 +38,13 @@ def is_compatible_next_transform(prev_transforms: List[str], transform_type: str
         return True
     compat_table = {
         'Rigid': ['Rigid'],
-        'Affine': ['Rigid', 'Affine'],
-        'SyN': ['Rigid', 'Affine'],
-        'Greedy': ['Rigid', 'Affine'],
+        # Add Similarity: Can follow Rigid
+        'Similarity': ['Rigid', 'Similarity'],
+        # Update Affine: Can now follow Similarity too
+        'Affine': ['Rigid', 'Similarity', 'Affine'],
+        # Update SyN/Greedy: Can follow Similarity
+        'SyN': ['Rigid', 'Similarity', 'Affine'],
+        'Greedy': ['Rigid', 'Similarity', 'Affine'],
     }
     return all([t in compat_table[transform_type] for t in prev_transforms])
 
@@ -147,6 +152,10 @@ def parse_transform(transform_str: str, args: argparse.Namespace) -> Tuple[str, 
         pd['optimizer'] = 'Adam' if len(params) < 2 else params[1]
         pd['scaling'] = False if len(params) < 3 else bool(params[2])
         opt_id = 3
+    elif transform_type == 'Similarity':
+        pd['optimizer_lr'] = float(params[0])
+        pd['optimizer'] = 'Adam' if len(params) < 2 else params[1]
+        opt_id = 2
     elif transform_type == 'Affine':
         pd['optimizer_lr'] = float(params[0])
         pd['optimizer'] = 'Adam' if len(params) < 2 else params[1]
@@ -258,17 +267,26 @@ def prepare_prev_transform(prev_transform, prev_transform_type, transform_type):
             }
     elif prev_transform_type == 'Rigid':
         rigidmat = prev_transform.get_rigid_matrix(homogenous=False).detach()
-        if transform_type == 'Rigid':
+        
+        # Check if NEXT is Similarity (treat it like Rigid)
+        if transform_type == 'Rigid' or transform_type == 'Similarity':
             dims = rigidmat.shape[1]
             return {
                 'init_translation': rigidmat[:, :dims, -1].contiguous(),
                 'init_moment': rigidmat[:, :dims, :dims].contiguous(),
-            }
-        else:
+            }        else:
             key = 'init_rigid' if transform_type == 'Affine' else 'init_affine'
             return {
                 key: rigidmat
             }
+    elif prev_transform_type == 'Similarity':
+        # Similarity acts like Rigid but outputs a Scaled Rigid matrix.
+        # We treat it as an initialization for Affine.
+        key = 'init_rigid' if transform_type == 'Affine' else 'init_affine'
+        return {
+            # Use get_rigid_matrix (which includes scale) from your new class
+            key: prev_transform.get_rigid_matrix(homogenous=False).detach()
+        }
     elif prev_transform_type == 'Affine':
         key = 'init_rigid' if transform_type == 'Affine' else 'init_affine'
         return {
@@ -538,6 +556,15 @@ def main():
                 fixed_images=fixed_batch,
                 moving_images=moving_batch,
                 **merged_params,
+            )
+        elif transform_type == 'Similarity':
+            reg = SimilarityRegistration(
+                scales=shrink_factors,
+                iterations=iterations,
+                fixed_images=fixed_batch,
+                moving_images=moving_batch,
+                # Pass init_translation/init_moment from Rigid if available
+                **merged_params, 
             )
         elif transform_type == 'Affine':
             reg = AffineRegistration(
