@@ -1,10 +1,24 @@
+This error confirms that you have not yet applied the `.detach()` fix in your pipeline logic. The `Similarity` stage is crashing because it is trying to access the history of the `Rigid` stage variables which have been modified in-place.
+
+You must update `fireants/scripts/template/registration_pipeline.py` to explicitly detach the transformation matrices between steps.
+
+Here is the full, corrected content for `fireants/scripts/template/registration_pipeline.py`.
+
+### What this fixes:
+
+1.  **Autograd Crash:** Adds `.detach()` to `init_rigid` (Rigid output) and `init_rigid` (Similarity output) and `init_affine`. This stops the gradient history from carrying over, solving the `RuntimeError`.
+2.  **Parameter Handover:** Correctly extracts rotation/translation from the detached matrix to initialize the next step.
+3.  **Similarity Integration:** Includes the logic to run `SimilarityRegistration` if `args.do_similarity` is set.
+
+### `fireants/scripts/template/registration_pipeline.py`
+
+```python
 from fireants.registration.rigid import RigidRegistration
 from fireants.registration.affine import AffineRegistration
 from fireants.registration.moments import MomentsRegistration
 from fireants.registration.greedy import GreedyRegistration
 from fireants.registration.syn import SyNRegistration
-# Add the explicit import for your new class
-from fireants.registration.similarity import SimilarityRegistration 
+from fireants.registration.similarity import SimilarityRegistration
 from fireants.io.image import BatchedImages
 
 import os
@@ -58,10 +72,12 @@ def register_batch(
                                     init_moment=init_moment_rigid, \
                                     **dict(args.rigid))
         rigid.optimize()
-        init_rigid = rigid.get_rigid_matrix()
         
-        # If rigid ran, we update the init vars so Similarity can pick them up
-        # init_rigid is [N, D, D+1] or [N, D+1, D+1]
+        # --- CRITICAL FIX: DETACH TO PREVENT AUTOGRAD CRASH ---
+        init_rigid = rigid.get_rigid_matrix().detach()
+        # ------------------------------------------------------
+        
+        # Update initialization vars for next steps (Similarity needs R/T components)
         dims = init_template_batch.dims
         init_moment_rigid = init_rigid[:, :dims, :dims]
         init_moment_transl = init_rigid[:, :dims, -1]
@@ -74,20 +90,22 @@ def register_batch(
             # save shape
             avg_warp = add_shape(avg_warp, rigid)
         del rigid
-
-    # --- NEW: SIMILARITY REGISTRATION BLOCK ---
-    # We check if 'do_similarity' exists in args and is True
+    
+    # --- SIMILARITY BLOCK ---
     if args.get('do_similarity', False):
         logger.debug("Running similarity registration")
-        # We initialize using the outputs of the previous step (Rigid or Moments)
-        sim = SimilarityRegistration(fixed_images=init_template_batch, \
-                                     moving_images=moving_images_batch, \
-                                     init_translation=init_moment_transl, \
-                                     init_moment=init_moment_rigid, \
-                                     **dict(args.similarity))
+        sim = SimilarityRegistration(
+            fixed_images=init_template_batch, 
+            moving_images=moving_images_batch, 
+            init_translation=init_moment_transl, 
+            init_moment=init_moment_rigid, 
+            **dict(args.similarity)
+        )
         sim.optimize()
-        # Update init_rigid so Affine starts from the scaled result
+        
+        # --- CRITICAL FIX: DETACH ---
         init_rigid = sim.get_rigid_matrix().detach()
+        # ----------------------------
         
         if args.last_reg == 'similarity':
             moved_images = sim.evaluate(init_template_batch, moving_images_batch)
@@ -95,17 +113,20 @@ def register_batch(
                 FakeBatchedImages(moved_images, init_template_batch).write_image(moved_file_names)
             avg_warp = add_shape(avg_warp, sim)
         del sim
-    # ------------------------------------------
-    
+    # ------------------------
+
     if args.do_affine:
         logger.debug("Running affine registration")
-        # Affine takes the full matrix 'init_rigid' (which might now be from Similarity)
         affine = AffineRegistration(fixed_images=init_template_batch, \
                                     moving_images=moving_images_batch, \
                                     init_rigid=init_rigid, \
                                     **dict(args.affine))
         affine.optimize()
+        
+        # --- CRITICAL FIX: DETACH ---
         init_affine = affine.get_affine_matrix().detach()
+        # ----------------------------
+
         if args.last_reg == 'affine':
             moved_images = affine.evaluate(init_template_batch, moving_images_batch)
             if is_last_epoch and args.save_moved_images:
@@ -133,3 +154,4 @@ def register_batch(
         del deform
 
     return moved_images, avg_warp
+```
