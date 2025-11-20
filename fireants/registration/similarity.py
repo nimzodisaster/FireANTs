@@ -11,71 +11,83 @@ logger = logging.getLogger(__name__)
 class SimilarityRegistration(RigidRegistration):
     """
     Similarity registration class (Rigid + Isotropic Scaling).
-    
-    Inherits from RigidRegistration but enforces a single scalar learning parameter
-    for scaling (s_x = s_y = s_z).
-    
-    Args:
-        scale_only (bool): If True, locks Rotation and Translation (using values from initialization)
-                           and optimizes ONLY the scale. Default: False.
+    Includes safeguards against scale explosion.
     """
 
-    def __init__(self, scales: List[float], iterations: List[int], 
-                fixed_images: BatchedImages, moving_images: BatchedImages,
-                loss_type: str = "cc",
-                optimizer: str = 'Adam', optimizer_params: dict = {},
-                optimizer_lr: float = 3e-2,
-                scale_only: bool = False,  # <--- NEW PARAMETER
-                **kwargs
-                ) -> None:
-        
+    def __init__(self, scales: List[float], iterations: List[int],
+                 fixed_images: BatchedImages, moving_images: BatchedImages,
+                 loss_type: str = "cc",
+                 optimizer: str = 'Adam', optimizer_params: dict = {},
+                 optimizer_lr: float = 1e-2, # Reduced default LR slightly
+                 scale_only: bool = False, 
+                 max_scale_change: float = 0.5, # New: Limit log-scale to +/- 0.5 (approx 0.6x to 1.65x)
+                 scale_lr_factor: float = 0.1,  # New: Scale learns 10x slower than translation
+                 **kwargs
+                 ) -> None:
+
         # 1. Initialize Parent
         kwargs['scaling'] = False
-        super().__init__(scales, iterations, fixed_images, moving_images, 
-                         loss_type=loss_type, optimizer=optimizer, 
+        super().__init__(scales, iterations, fixed_images, moving_images,
+                         loss_type=loss_type, optimizer=optimizer,
                          optimizer_params=optimizer_params, optimizer_lr=optimizer_lr,
                          **kwargs)
-        
+
+        self.max_scale_change = max_scale_change
+
         # 2. Define Isotropic Scale Parameter
         device = fixed_images.device
         self.logscale = nn.Parameter(torch.zeros((self.opt_size, 1), device=device, dtype=self.dtype))
 
-        # 3. Re-initialize Optimizer
-        # If scale_only is True, we ONLY pass self.logscale to the optimizer.
-        # self.rotation and self.transl remain as Parameters (so gradients are calculated),
-        # but the optimizer ignores them, effectively freezing them at their initial values.
-        # Inside SimilarityRegistration.__init__ method:
+        # 3. Parameter Groups
+        # We must separate scale from rigid params to give it a lower learning rate
+        
         if scale_only:
-            # --- CRITICAL FIX: Explicitly freeze R and T ---
-            # This prevents PyTorch from tracking their history during the forward pass,
-            # which resolves the inplace modification error.
+            # Freeze Rigid
             self.rotation.requires_grad_(False)
             self.transl.requires_grad_(False)
-            # ---------------------------------------------
-            params = [self.logscale]
-            logger.info("Similarity Registration: Optimizing SCALE ONLY (Rotation/Translation frozen)")
+            
+            # Optimize only scale, but with the reduced factor
+            param_groups = [
+                {'params': self.logscale, 'lr': optimizer_lr * scale_lr_factor}
+            ]
+            logger.info("Similarity Registration: Optimizing SCALE ONLY (Rigid frozen)")
         else:
-            params = [self.rotation, self.transl, self.logscale]
-            logger.info("Similarity Registration: Optimizing Scale, Rotation, and Translation")
-        
+            # Optimize both, but separate groups
+            param_groups = [
+                {'params': [self.rotation, self.transl], 'lr': optimizer_lr},
+                {'params': self.logscale, 'lr': optimizer_lr * scale_lr_factor}
+            ]
+            logger.info("Similarity Registration: Optimizing Scale (Slow), Rotation, and Translation")
+
+        # 4. Initialize Optimizer with groups
         if optimizer == 'SGD':
-            self.optimizer = SGD(params, lr=optimizer_lr, **optimizer_params)
+            self.optimizer = SGD(param_groups, **optimizer_params)
         elif optimizer == 'Adam':
-            self.optimizer = Adam(params, lr=optimizer_lr, **optimizer_params)
+            self.optimizer = Adam(param_groups, **optimizer_params)
 
     def get_rigid_matrix(self, homogenous=True):
         """
         Compute the transformation matrix using isotropic scaling.
         """
         rigidmat = self.get_rotation_matrix() # [N, dim+1, dim+1]
-        scale = torch.exp(self.logscale)[..., None]  
+        
+        # --- SAFETY LATCH: CLAMPING ---
+        # Prevents the optimizer from zooming to infinity or zero.
+        # Clamping in the forward pass allows gradients to flow until the limit is hit.
+        clamped_logscale = torch.clamp(self.logscale, -self.max_scale_change, self.max_scale_change)
+        scale = torch.exp(clamped_logscale)[..., None]
+        # ------------------------------
+
         matclone = rigidmat.clone()
         matclone[:, :-1, :-1] = scale * rigidmat[:, :-1, :-1]
-        
+
         transl = self.transl
         if self.around_center:
             # t' = t + c - (s * R) @ c
+            # Critical: This calculation couples Scale and Translation. 
+            # If Scale explodes, this term becomes massive, throwing the image out of FOV.
+            # The clamping above protects this calculation.
             transl = transl + self.center - (matclone[:, :-1, :-1] @ self.center[..., None]).squeeze(-1)
-            
+
         matclone[:, :-1, -1] = transl
         return matclone.contiguous() if homogenous else matclone[:, :-1, :].contiguous()
