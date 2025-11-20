@@ -1,18 +1,3 @@
-This error confirms that you have not yet applied the `.detach()` fix in your pipeline logic. The `Similarity` stage is crashing because it is trying to access the history of the `Rigid` stage variables which have been modified in-place.
-
-You must update `fireants/scripts/template/registration_pipeline.py` to explicitly detach the transformation matrices between steps.
-
-Here is the full, corrected content for `fireants/scripts/template/registration_pipeline.py`.
-
-### What this fixes:
-
-1.  **Autograd Crash:** Adds `.detach()` to `init_rigid` (Rigid output) and `init_rigid` (Similarity output) and `init_affine`. This stops the gradient history from carrying over, solving the `RuntimeError`.
-2.  **Parameter Handover:** Correctly extracts rotation/translation from the detached matrix to initialize the next step.
-3.  **Similarity Integration:** Includes the logic to run `SimilarityRegistration` if `args.do_similarity` is set.
-
-### `fireants/scripts/template/registration_pipeline.py`
-
-```python
 from fireants.registration.rigid import RigidRegistration
 from fireants.registration.affine import AffineRegistration
 from fireants.registration.moments import MomentsRegistration
@@ -154,4 +139,3 @@ def register_batch(
         del deform
 
     return moved_images, avg_warp
-```
