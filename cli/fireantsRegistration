@@ -152,10 +152,19 @@ def parse_transform(transform_str: str, args: argparse.Namespace) -> Tuple[str, 
         pd['optimizer'] = 'Adam' if len(params) < 2 else params[1]
         pd['scaling'] = False if len(params) < 3 else bool(params[2])
         opt_id = 3
+    # In parse_transform function:
     elif transform_type == 'Similarity':
         pd['optimizer_lr'] = float(params[0])
         pd['optimizer'] = 'Adam' if len(params) < 2 else params[1]
-        opt_id = 2
+        # Parse scale_only flag (Similarity[lr, optim, scale_only])
+        if len(params) > 2:
+            # Check for string "True"/"False" or 1/0
+            val = params[2]
+            if isinstance(val, str):
+                pd['scale_only'] = val.lower() in ['true', '1', 'yes']
+            else:
+                pd['scale_only'] = bool(val)
+        opt_id = 3  # Updated to 3 parameters
     elif transform_type == 'Affine':
         pd['optimizer_lr'] = float(params[0])
         pd['optimizer'] = 'Adam' if len(params) < 2 else params[1]
