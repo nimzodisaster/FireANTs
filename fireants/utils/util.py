@@ -122,7 +122,7 @@ class ConvergenceMonitor:
             return False
         else:
             slope = self._compute_slope()
-            return abs(slope) > self.slope
+            return abs(slope) < self.slope
     
     def reset(self):
         self.losses.clear()
