@@ -114,14 +114,28 @@ class MomentsRegistration(AbstractRegistration):
     def find_best_detmat_3d(self, U_f, U_m, fixed_arrays, moving_arrays, com_f, com_m, xyz_f, xyz_m):
         ''' 
         Find best determinant matrix for 3D 
+        Explicitly define candidates to ensure strict separation of Det +1 (Rot) and Det -1 (AntiRot)
         '''
-        rot = [-np.eye(3) for _ in range(4)]
-        antirot = [np.eye(3) for _ in range(4)]
-        for i in range(3):
-            rot[i][i, i] = 1
-            antirot[i][i, i] = -1
-        rot[-1] *= -1
-        antirot[-1] *= -1
+        # Determinant +1 candidates (Rotations)
+        # Identity and 180-degree rotations around principal axes
+        rot_candidates = [
+            [1, 1, 1],      # Identity
+            [1, -1, -1],    # Rot x 180
+            [-1, 1, -1],    # Rot y 180
+            [-1, -1, 1]     # Rot z 180
+        ]
+        rot = [np.diag(r).astype(np.float32) for r in rot_candidates]
+
+        # Determinant -1 candidates (Reflections)
+        # Inversion and single-axis reflections
+        antirot_candidates = [
+            [-1, -1, -1],   # Inversion
+            [-1, 1, 1],     # Reflect x
+            [1, -1, 1],     # Reflect y
+            [1, 1, -1]      # Reflect z
+        ]
+        antirot = [np.diag(r).astype(np.float32) for r in antirot_candidates]
+
         if self.orientation == 'rot':
             oris = rot
         elif self.orientation == 'antirot':
@@ -136,7 +150,7 @@ class MomentsRegistration(AbstractRegistration):
         this is a helper function for find_best_detmat_2d and find_best_detmat_3d which return the best orientation matrix 
         '''
         oris = np.array(oris)   # [confs, d, d]
-        oris = torch.tensor(oris, device=fixed_arrays.device).unsqueeze(1).expand(-1, self.opt_size, -1, -1)       # [confs, N, d, d]
+        oris = torch.tensor(oris, device=fixed_arrays.device).unsqueeze(1).expand(-1, self.opt_size, -1, -1)        # [confs, N, d, d]
         oris = oris.to(U_f.dtype)
         moving_p2t = self.moving_images.get_phy2torch().to(U_f.dtype)
 
@@ -316,7 +330,14 @@ class MomentsRegistration(AbstractRegistration):
             Rf = (U_f @ detmat @ U_m).to(self.fixed_images.device)
             Rf = Rf.transpose(-1, -2)
             self.Rf = Rf
-            self.tf = com_m.to(com_f.device) - (com_f[:, None] @ (Rf.transpose(-1, -2))).squeeze(1)
+            
+            # Fix per feedback: tf = com_m - Rf * com_f
+            # Rf is [N, d, d]. com_f is [N, d].
+            # We need matrix-vector multiplication, effectively (Rf @ com_f).
+            # Previous implementation used com_f @ Rf.transpose, which implied c_f^T R^T = (R c_f)^T,
+            # but the feedback indicates the transpose logic was causing misalignment.
+            self.tf = com_m.to(com_f.device) - (self.Rf @ com_f.unsqueeze(-1)).squeeze(-1)
+
         else:
             raise NotImplementedError("Only 1st and 2nd order moments supported.")
 
@@ -364,22 +385,3 @@ class MomentsRegistration(AbstractRegistration):
         # optimize
         self.optimize_helper()
         self.optimized = True
-
-
-if __name__ == '__main__':
-    from fireants.io.image import Image, BatchedImages
-    import os
-    img_dtype = torch.bfloat16
-
-    path = os.environ['DATAPATH_R']
-    img1 = Image.load_file(f'{path}/BRATS2021/training/BraTS2021_00598/BraTS2021_00598_t1.nii.gz', dtype=img_dtype)
-    img2 = Image.load_file(f'{path}/BRATS2021/training/BraTS2021_00599/BraTS2021_00599_t1.nii.gz', dtype=img_dtype)
-    fixed = BatchedImages([img1, ])
-    moving = BatchedImages([img2,])
-    transform = MomentsRegistration(1, fixed, moving, moments=2,)
-    transform.optimize()
-    rig = transform.get_rigid_transl_init()
-    rot = transform.get_rigid_moment_init()
-    print(rig.shape, rot.shape)
-    print(rig, rot)
-    print(torch.linalg.det(rot))
