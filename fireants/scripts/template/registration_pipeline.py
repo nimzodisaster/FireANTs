@@ -87,7 +87,7 @@ def register_batch(
                                      **dict(args.similarity))
         sim.optimize()
         # Update init_rigid so Affine starts from the scaled result
-        init_rigid = sim.get_rigid_matrix()
+        init_rigid = sim.get_rigid_matrix().detach()
         
         if args.last_reg == 'similarity':
             moved_images = sim.evaluate(init_template_batch, moving_images_batch)
@@ -105,7 +105,7 @@ def register_batch(
                                     init_rigid=init_rigid, \
                                     **dict(args.affine))
         affine.optimize()
-        init_affine = affine.get_affine_matrix()
+        init_affine = affine.get_affine_matrix().detach()
         if args.last_reg == 'affine':
             moved_images = affine.evaluate(init_template_batch, moving_images_batch)
             if is_last_epoch and args.save_moved_images:
