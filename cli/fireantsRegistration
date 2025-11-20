@@ -520,14 +520,12 @@ def main():
         moments, ori = parse_moment_transform(transform_type)
         # run moment matching
         moments_reg = MomentsRegistration(
-            scale=8,   # <--- GOOD: Downsample to match global shape
+            scale=1,   # <--- GOOD: Downsample to match global shape
             fixed_images=fixed_batch,
             moving_images=moving_batch,
             moments=moments,
             orientation=ori,
             # Use Global Mutual Information to check orientation
-            loss_type='mi', 
-            loss_params={'num_bins': 32}
         )
         moments_reg.optimize()
         # if no other transforms are provided, this is the final transform, save
