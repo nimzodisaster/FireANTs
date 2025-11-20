@@ -44,7 +44,14 @@ class SimilarityRegistration(RigidRegistration):
         # If scale_only is True, we ONLY pass self.logscale to the optimizer.
         # self.rotation and self.transl remain as Parameters (so gradients are calculated),
         # but the optimizer ignores them, effectively freezing them at their initial values.
+        # Inside SimilarityRegistration.__init__ method:
         if scale_only:
+            # --- CRITICAL FIX: Explicitly freeze R and T ---
+            # This prevents PyTorch from tracking their history during the forward pass,
+            # which resolves the inplace modification error.
+            self.rotation.requires_grad_(False)
+            self.transl.requires_grad_(False)
+            # ---------------------------------------------
             params = [self.logscale]
             logger.info("Similarity Registration: Optimizing SCALE ONLY (Rotation/Translation frozen)")
         else:
